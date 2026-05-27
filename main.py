@@ -63,7 +63,8 @@ class KQueensVisualizer:
         self.n = n
         self.k = k
         self.active_obstacles = set()  # активные препятствия (после поиска)
-        self.temp_obstacles = set()    # временные препятствия (до нажатия "Найти")
+        self.temp_obstacles = set()    # временные препятствия для ДОБАВЛЕНИЯ (светло-серые)
+        self.delete_obstacles = set()  # препятствия для УДАЛЕНИЯ (с красным крестиком)
         self.selected_queen = None
         self.current_idx = 0
         self.check_mode = False
@@ -71,7 +72,7 @@ class KQueensVisualizer:
         self.solutions = []
         self.total = 0
         self.min_queens = 0
-        self.has_changes = False  # флаг наличия неподтвержденных изменений
+        self.has_changes = False
 
         # Создаем окно и оси
         self.fig, self.ax = plt.subplots(figsize=(9, 9))
@@ -175,32 +176,39 @@ class KQueensVisualizer:
         ]
         return colors[index % len(colors)]
 
-    def draw_obstacle(self, row, col, is_temp=False):
+    def draw_obstacle(self, row, col, is_temp=False, is_delete=False):
         """Рисует препятствие с крестиком"""
-        # Заливка клетки
-        if is_temp:
-            color = 'lightgray'
-            alpha = 0.5
-        else:
+        if is_delete:
+            # Препятствие на удаление - красный крестик поверх активного фона
             color = 'gray'
             alpha = 0.7
-        
-        rect = plt.Rectangle((col - 0.5, row - 0.5), 1, 1,
-                             color=color, alpha=alpha, zorder=3)
-        self.ax.add_patch(rect)
-        
-        # Рисуем крестик (белый для активных, серый для временных)
-        cross_color = 'white' if not is_temp else 'gray'
-        line_width = 2 if not is_temp else 1.5
-        
-        # Горизонтальная и вертикальная линии креста
-        self.ax.plot([col - 0.35, col + 0.35], [row - 0.35, row + 0.35],
-                    color=cross_color, linewidth=line_width, zorder=4)
-        self.ax.plot([col + 0.35, col - 0.35], [row - 0.35, row + 0.35],
-                    color=cross_color, linewidth=line_width, zorder=4)
-        
-        # Если временное препятствие, добавляем пунктирную рамку
-        if is_temp:
+            cross_color = 'red'
+            line_width = 3
+            # Не рисуем пунктирную рамку для удаления
+            rect = plt.Rectangle((col - 0.5, row - 0.5), 1, 1,
+                                 color=color, alpha=alpha, zorder=3)
+            self.ax.add_patch(rect)
+            
+            # Большой красный крестик
+            self.ax.plot([col - 0.4, col + 0.4], [row - 0.4, row + 0.4],
+                        color=cross_color, linewidth=line_width, zorder=5)
+            self.ax.plot([col + 0.4, col - 0.4], [row - 0.4, row + 0.4],
+                        color=cross_color, linewidth=line_width, zorder=5)
+        elif is_temp:
+            # Новое препятствие для добавления - светло-серое с серым крестиком
+            color = 'lightgray'
+            alpha = 0.5
+            rect = plt.Rectangle((col - 0.5, row - 0.5), 1, 1,
+                                 color=color, alpha=alpha, zorder=3)
+            self.ax.add_patch(rect)
+            
+            # Серый крестик
+            self.ax.plot([col - 0.35, col + 0.35], [row - 0.35, row + 0.35],
+                        color='gray', linewidth=2, zorder=4)
+            self.ax.plot([col + 0.35, col - 0.35], [row - 0.35, row + 0.35],
+                        color='gray', linewidth=2, zorder=4)
+            
+            # Пунктирная рамка
             self.ax.plot([col - 0.45, col + 0.45], [row - 0.45, row - 0.45],
                         'gray', linewidth=1, linestyle='--', zorder=3)
             self.ax.plot([col + 0.45, col - 0.45], [row - 0.45, row - 0.45],
@@ -209,6 +217,19 @@ class KQueensVisualizer:
                         'gray', linewidth=1, linestyle='--', zorder=3)
             self.ax.plot([col + 0.45, col - 0.45], [row + 0.45, row + 0.45],
                         'gray', linewidth=1, linestyle='--', zorder=3)
+        else:
+            # Активное препятствие - серое с белым крестиком
+            color = 'gray'
+            alpha = 0.7
+            rect = plt.Rectangle((col - 0.5, row - 0.5), 1, 1,
+                                 color=color, alpha=alpha, zorder=3)
+            self.ax.add_patch(rect)
+            
+            # Белый крестик
+            self.ax.plot([col - 0.35, col + 0.35], [row - 0.35, row + 0.35],
+                        color='white', linewidth=2, zorder=4)
+            self.ax.plot([col + 0.35, col - 0.35], [row - 0.35, row + 0.35],
+                        color='white', linewidth=2, zorder=4)
 
     def on_click(self, event):
         if event.inaxes != self.ax:
@@ -247,24 +268,60 @@ class KQueensVisualizer:
                     self.update_display()
                     return
 
-        # Обычный режим: ЛКМ - добавление/удаление временных препятствий
+        # Обычный режим: ЛКМ - добавление/удаление препятствий
         if event.button == 1 and not self.check_mode:
             self.selected_queen = None
             self.check_mode = False
             
-            if (row, col) in self.temp_obstacles:
-                self.temp_obstacles.remove((row, col))
-            else:
-                self.temp_obstacles.add((row, col))
+            # Проверяем, кликнули ли на активное препятствие (помечаем на удаление)
+            if (row, col) in self.active_obstacles:
+                if (row, col) not in self.delete_obstacles:
+                    self.delete_obstacles.add((row, col))
+                    self.has_changes = True
+                else:
+                    # Если уже помечено на удаление, снимаем пометку
+                    self.delete_obstacles.discard((row, col))
+                    self.has_changes = True
+                self.update_display()
+                return
             
-            self.has_changes = True
+            # Проверяем, кликнули ли на препятствие, помеченное на удаление
+            elif (row, col) in self.delete_obstacles:
+                self.delete_obstacles.discard((row, col))
+                self.has_changes = True
+                self.update_display()
+                return
+            
+            # Проверяем, кликнули ли на временное препятствие (для добавления)
+            elif (row, col) in self.temp_obstacles:
+                self.temp_obstacles.remove((row, col))
+                self.has_changes = True
+            else:
+                # Добавляем новое препятствие для добавления
+                self.temp_obstacles.add((row, col))
+                self.has_changes = True
+            
             self.update_display()
 
     def find_solution(self, event):
         """Найти решение с текущими препятствиями"""
         print("Ищем минимальное покрытие доски ферзями...")
-        # Применяем временные препятствия
-        self.active_obstacles = self.temp_obstacles.copy()
+        
+        # Применяем изменения
+        new_active = self.active_obstacles.copy()
+        
+        # Добавляем новые препятствия
+        for obs in self.temp_obstacles:
+            new_active.add(obs)
+        
+        # Удаляем помеченные препятствия
+        for obs in self.delete_obstacles:
+            new_active.discard(obs)
+        
+        self.active_obstacles = new_active
+        self.temp_obstacles.clear()
+        self.delete_obstacles.clear()
+        
         self.solutions, self.min_queens = find_min_dominating_queens(self.n, self.active_obstacles)
         self.total = len(self.solutions)
         self.current_idx = 0
@@ -283,6 +340,7 @@ class KQueensVisualizer:
     def clear_all(self, event):
         """Очистить все препятствия и найти решение для пустой доски"""
         self.temp_obstacles.clear()
+        self.delete_obstacles.clear()
         self.active_obstacles.clear()
         self.has_changes = True
         self.selected_queen = None
@@ -355,15 +413,19 @@ class KQueensVisualizer:
                                          color=queen_color, alpha=0.8, zorder=4)
                         self.ax.add_patch(dot)
 
-        # Рисуем активные препятствия (серые с крестиком)
+        # Рисуем активные препятствия (кроме помеченных на удаление)
         for (row, col) in self.active_obstacles:
-            self.draw_obstacle(row, col, is_temp=False)
+            if (row, col) not in self.delete_obstacles:
+                self.draw_obstacle(row, col, is_temp=False, is_delete=False)
         
-        # Рисуем временные препятствия (светло-серые с крестиком и пунктиром)
-        if self.has_changes:
-            for (row, col) in self.temp_obstacles:
-                if (row, col) not in self.active_obstacles:
-                    self.draw_obstacle(row, col, is_temp=True)
+        # Рисуем препятствия, помеченные на удаление (красный крестик)
+        for (row, col) in self.delete_obstacles:
+            self.draw_obstacle(row, col, is_temp=False, is_delete=True)
+        
+        # Рисуем новые препятствия для добавления (светло-серые)
+        for (row, col) in self.temp_obstacles:
+            if (row, col) not in self.active_obstacles:
+                self.draw_obstacle(row, col, is_temp=True, is_delete=False)
 
         # Рисуем ферзей
         if queens_coords and not self.has_changes:
@@ -399,11 +461,6 @@ class KQueensVisualizer:
                         fontweight='bold',
                         zorder=5
                     )
-        elif not self.has_changes and not queens_coords:
-            # Если нет решений, показываем сообщение
-            self.ax.text(n/2, n/2, 'НЕТ РЕШЕНИЙ\nДобавьте препятствия\nи нажмите "Найти решение"',
-                        ha='center', va='center', fontsize=14, color='red',
-                        transform=self.ax.transData, zorder=5)
 
         # Текстовая информация
         if self.total > 0 and not self.has_changes:
@@ -430,7 +487,7 @@ class KQueensVisualizer:
         elif self.has_changes:
             text = "Есть изменения! Нажмите 'Найти решение' для поиска минимального покрытия"
         else:
-            text = "НЕТ РЕШЕНИЙ (добавьте препятствия и нажмите 'Найти решение')"
+            text = "НЕТ РЕШЕНИЙ"
 
         self.ax.text(n / 2, -1.8, text,
                      ha='center', va='top',
