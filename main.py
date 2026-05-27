@@ -61,8 +61,9 @@ def find_min_dominating_queens(n, obstacles):
 class KQueensVisualizer:
     def __init__(self, n, k=None):
         self.n = n
-        self.k = k  # теперь k не используется, оставлен для совместимости
-        self.obstacles = set()
+        self.k = k
+        self.active_obstacles = set()  # активные препятствия (после поиска)
+        self.temp_obstacles = set()    # временные препятствия (до нажатия "Найти")
         self.selected_queen = None
         self.current_idx = 0
         self.check_mode = False
@@ -70,31 +71,35 @@ class KQueensVisualizer:
         self.solutions = []
         self.total = 0
         self.min_queens = 0
+        self.has_changes = False  # флаг наличия неподтвержденных изменений
 
-        # Сначала создаем окно и оси
+        # Создаем окно и оси
         self.fig, self.ax = plt.subplots(figsize=(9, 9))
         plt.subplots_adjust(bottom=0.18)
         
-        # Затем создаем кнопки
+        # Создаем кнопки
         self.create_buttons()
         
         # Подключаем обработчик кликов
         self.fig.canvas.mpl_connect('button_press_event', self.on_click)
         
-        # Теперь запускаем поиск решений
+        # Запускаем начальный поиск решений для пустой доски
         print("Ищем минимальное покрытие доски ферзями...")
-        self.recalculate()
+        self.find_solution(None)
 
     def update_window_title(self):
         if self.total > 0:
             title = f"Минимальное покрытие доски {self.n}x{self.n} - {self.min_queens} ферзей - Решение {self.current_idx + 1} из {self.total}"
             if self.check_mode:
                 title += f" [Режим проверки: подсвечено {len(self.highlighted_queens)} ферзей]"
+            if self.has_changes:
+                title += " [Есть изменения! Нажмите 'Найти решение']"
             self.fig.canvas.manager.set_window_title(title)
         else:
-            self.fig.canvas.manager.set_window_title(
-                f"Покрытие доски {self.n}x{self.n} - НЕТ РЕШЕНИЙ"
-            )
+            title = f"Покрытие доски {self.n}x{self.n} - НЕТ РЕШЕНИЙ"
+            if self.has_changes:
+                title += " [Есть изменения! Нажмите 'Найти решение']"
+            self.fig.canvas.manager.set_window_title(title)
 
     def create_buttons(self):
         button_width = 0.12
@@ -112,21 +117,24 @@ class KQueensVisualizer:
         ax_prev = plt.axes([prev_x, nav_y, button_width, button_height])
         ax_next = plt.axes([next_x, nav_y, button_width, button_height])
         ax_last = plt.axes([last_x, nav_y, button_width, button_height])
-        ax_clear = plt.axes([center_x - 0.18, 0.05, 0.16, 0.04])
-        ax_check = plt.axes([center_x + 0.02, 0.05, 0.16, 0.04])
+        ax_clear = plt.axes([center_x - 0.28, 0.05, 0.14, 0.04])
+        ax_find = plt.axes([center_x - 0.12, 0.05, 0.14, 0.04])
+        ax_check = plt.axes([center_x + 0.04, 0.05, 0.14, 0.04])
 
         self.btn_first = Button(ax_first, '← Первое')
         self.btn_prev = Button(ax_prev, '< Назад')
         self.btn_next = Button(ax_next, 'Вперёд >')
         self.btn_last = Button(ax_last, 'Последнее →')
-        self.btn_clear = Button(ax_clear, 'Очистить препятствия')
+        self.btn_clear = Button(ax_clear, 'Очистить всё')
+        self.btn_find = Button(ax_find, '⟳ Найти решение')
         self.btn_check = Button(ax_check, 'Проверить ходы')
 
         self.btn_first.on_clicked(self.first_solution)
         self.btn_prev.on_clicked(self.prev_solution)
         self.btn_next.on_clicked(self.next_solution)
         self.btn_last.on_clicked(self.last_solution)
-        self.btn_clear.on_clicked(self.clear_obstacles)
+        self.btn_clear.on_clicked(self.clear_all)
+        self.btn_find.on_clicked(self.find_solution)
         self.btn_check.on_clicked(self.toggle_check_mode)
 
     def toggle_check_mode(self, event):
@@ -137,17 +145,20 @@ class KQueensVisualizer:
         self.selected_queen = None
         self.update_display()
 
-    def get_moves_for_queen(self, row, col):
+    def get_moves_for_queen(self, row, col, use_temp_obstacles=False):
         moves = set()
         directions = [
             (-1, 0), (1, 0), (0, -1), (0, 1),
             (-1, -1), (-1, 1), (1, -1), (1, 1)
         ]
+        
+        # Выбираем, какие препятствия использовать
+        obstacles = self.temp_obstacles if use_temp_obstacles else self.active_obstacles
 
         for dr, dc in directions:
             r, c = row + dr, col + dc
             while 0 <= r < self.n and 0 <= c < self.n:
-                if (r, c) in self.obstacles:
+                if (r, c) in obstacles:
                     break
                 moves.add((r, c))
                 r += dr
@@ -164,6 +175,41 @@ class KQueensVisualizer:
         ]
         return colors[index % len(colors)]
 
+    def draw_obstacle(self, row, col, is_temp=False):
+        """Рисует препятствие с крестиком"""
+        # Заливка клетки
+        if is_temp:
+            color = 'lightgray'
+            alpha = 0.5
+        else:
+            color = 'gray'
+            alpha = 0.7
+        
+        rect = plt.Rectangle((col - 0.5, row - 0.5), 1, 1,
+                             color=color, alpha=alpha, zorder=3)
+        self.ax.add_patch(rect)
+        
+        # Рисуем крестик (белый для активных, серый для временных)
+        cross_color = 'white' if not is_temp else 'gray'
+        line_width = 2 if not is_temp else 1.5
+        
+        # Горизонтальная и вертикальная линии креста
+        self.ax.plot([col - 0.35, col + 0.35], [row - 0.35, row + 0.35],
+                    color=cross_color, linewidth=line_width, zorder=4)
+        self.ax.plot([col + 0.35, col - 0.35], [row - 0.35, row + 0.35],
+                    color=cross_color, linewidth=line_width, zorder=4)
+        
+        # Если временное препятствие, добавляем пунктирную рамку
+        if is_temp:
+            self.ax.plot([col - 0.45, col + 0.45], [row - 0.45, row - 0.45],
+                        'gray', linewidth=1, linestyle='--', zorder=3)
+            self.ax.plot([col + 0.45, col - 0.45], [row - 0.45, row - 0.45],
+                        'gray', linewidth=1, linestyle='--', zorder=3)
+            self.ax.plot([col - 0.45, col + 0.45], [row + 0.45, row + 0.45],
+                        'gray', linewidth=1, linestyle='--', zorder=3)
+            self.ax.plot([col + 0.45, col - 0.45], [row + 0.45, row + 0.45],
+                        'gray', linewidth=1, linestyle='--', zorder=3)
+
     def on_click(self, event):
         if event.inaxes != self.ax:
             return
@@ -177,7 +223,7 @@ class KQueensVisualizer:
             return
 
         # В режиме проверки ходов
-        if self.check_mode and self.solutions:
+        if self.check_mode and self.solutions and not self.has_changes:
             # Проверяем, есть ли ферзь в этой клетке
             for idx, (r, c) in enumerate(self.solutions[self.current_idx]):
                 if r == row and c == col:
@@ -191,7 +237,7 @@ class KQueensVisualizer:
             return
 
         # Обычный режим: ПКМ - выделение ферзя
-        if event.button == 3 and self.solutions:
+        if event.button == 3 and self.solutions and not self.has_changes:
             for idx, (r, c) in enumerate(self.solutions[self.current_idx]):
                 if r == row and c == col:
                     if self.selected_queen == (row, col):
@@ -201,22 +247,31 @@ class KQueensVisualizer:
                     self.update_display()
                     return
 
-        # Обычный режим: ЛКМ - добавление/удаление препятствий
+        # Обычный режим: ЛКМ - добавление/удаление временных препятствий
         if event.button == 1 and not self.check_mode:
             self.selected_queen = None
-            if (row, col) in self.obstacles:
-                self.obstacles.remove((row, col))
+            self.check_mode = False
+            
+            if (row, col) in self.temp_obstacles:
+                self.temp_obstacles.remove((row, col))
             else:
-                self.obstacles.add((row, col))
-            self.recalculate()
+                self.temp_obstacles.add((row, col))
+            
+            self.has_changes = True
+            self.update_display()
 
-    def recalculate(self):
-        self.solutions, self.min_queens = find_min_dominating_queens(self.n, self.obstacles)
+    def find_solution(self, event):
+        """Найти решение с текущими препятствиями"""
+        print("Ищем минимальное покрытие доски ферзями...")
+        # Применяем временные препятствия
+        self.active_obstacles = self.temp_obstacles.copy()
+        self.solutions, self.min_queens = find_min_dominating_queens(self.n, self.active_obstacles)
         self.total = len(self.solutions)
         self.current_idx = 0
         self.check_mode = False
         self.highlighted_queens.clear()
         self.selected_queen = None
+        self.has_changes = False
         
         if self.total > 0:
             print(f"Найдено {self.total} решений с {self.min_queens} ферзями")
@@ -225,12 +280,17 @@ class KQueensVisualizer:
         
         self.update_display()
 
-    def clear_obstacles(self, event):
-        self.obstacles.clear()
+    def clear_all(self, event):
+        """Очистить все препятствия и найти решение для пустой доски"""
+        self.temp_obstacles.clear()
+        self.active_obstacles.clear()
+        self.has_changes = True
         self.selected_queen = None
         self.check_mode = False
         self.highlighted_queens.clear()
-        self.recalculate()
+        
+        # Пересчитываем для пустой доски
+        self.find_solution(event)
 
     def draw_board(self, board):
         self.ax.clear()
@@ -250,10 +310,10 @@ class KQueensVisualizer:
         queens_coords = board if board else []
 
         # Рисуем зоны атаки всех ферзей (полупрозрачная зеленая заливка)
-        if queens_coords:
+        if queens_coords and not self.has_changes:
             all_attacked = set()
             for r, c in queens_coords:
-                all_attacked.update(self.get_moves_for_queen(r, c))
+                all_attacked.update(self.get_moves_for_queen(r, c, use_temp_obstacles=False))
                 all_attacked.add((r, c))
             
             for (r, c) in all_attacked:
@@ -263,8 +323,8 @@ class KQueensVisualizer:
                     self.ax.add_patch(rect)
 
         # Рисуем ходы выделенного ферзя в обычном режиме (ПКМ)
-        if self.selected_queen and not self.check_mode:
-            moves = self.get_moves_for_queen(*self.selected_queen)
+        if self.selected_queen and not self.check_mode and not self.has_changes:
+            moves = self.get_moves_for_queen(*self.selected_queen, use_temp_obstacles=False)
             for (r, c) in moves:
                 rect = plt.Rectangle((c - 0.5, r - 0.5), 1, 1,
                                      color='orange', alpha=0.3, zorder=2)
@@ -275,9 +335,9 @@ class KQueensVisualizer:
                 self.ax.add_patch(dot)
 
         # Рисуем ходы подсвеченных ферзей в режиме проверки
-        if self.check_mode and self.highlighted_queens:
+        if self.check_mode and self.highlighted_queens and not self.has_changes:
             for highlighted in self.highlighted_queens:
-                moves = self.get_moves_for_queen(*highlighted)
+                moves = self.get_moves_for_queen(*highlighted, use_temp_obstacles=False)
                 queen_idx = None
                 for idx, (r, c) in enumerate(queens_coords):
                     if (r, c) == highlighted:
@@ -295,14 +355,18 @@ class KQueensVisualizer:
                                          color=queen_color, alpha=0.8, zorder=4)
                         self.ax.add_patch(dot)
 
-        # Рисуем препятствия
-        for (row, col) in self.obstacles:
-            rect = plt.Rectangle((col - 0.5, row - 0.5), 1, 1,
-                                 color='gray', alpha=0.7, zorder=3)
-            self.ax.add_patch(rect)
+        # Рисуем активные препятствия (серые с крестиком)
+        for (row, col) in self.active_obstacles:
+            self.draw_obstacle(row, col, is_temp=False)
+        
+        # Рисуем временные препятствия (светло-серые с крестиком и пунктиром)
+        if self.has_changes:
+            for (row, col) in self.temp_obstacles:
+                if (row, col) not in self.active_obstacles:
+                    self.draw_obstacle(row, col, is_temp=True)
 
         # Рисуем ферзей
-        if queens_coords:
+        if queens_coords and not self.has_changes:
             for idx, (r, c) in enumerate(queens_coords):
                 if self.selected_queen == (r, c) and not self.check_mode:
                     color = 'blue'
@@ -335,15 +399,20 @@ class KQueensVisualizer:
                         fontweight='bold',
                         zorder=5
                     )
+        elif not self.has_changes and not queens_coords:
+            # Если нет решений, показываем сообщение
+            self.ax.text(n/2, n/2, 'НЕТ РЕШЕНИЙ\nДобавьте препятствия\nи нажмите "Найти решение"',
+                        ha='center', va='center', fontsize=14, color='red',
+                        transform=self.ax.transData, zorder=5)
 
         # Текстовая информация
-        if self.total > 0:
+        if self.total > 0 and not self.has_changes:
             # Проверяем, все ли клетки покрыты
             all_cells = {(r, c) for r in range(n) for c in range(n) 
-                        if (r, c) not in self.obstacles}
+                        if (r, c) not in self.active_obstacles}
             attacked = set()
             for r, c in queens_coords:
-                attacked.update(self.get_moves_for_queen(r, c))
+                attacked.update(self.get_moves_for_queen(r, c, use_temp_obstacles=False))
                 attacked.add((r, c))
             uncovered = all_cells - attacked
             
@@ -358,8 +427,10 @@ class KQueensVisualizer:
                     text += f" | НЕПОКРЫТО: {len(uncovered)} клеток!"
                 else:
                     text += " | ✓ ВСЕ КЛЕТКИ ПОКРЫТЫ"
+        elif self.has_changes:
+            text = "Есть изменения! Нажмите 'Найти решение' для поиска минимального покрытия"
         else:
-            text = "НЕТ РЕШЕНИЙ (добавьте или уберите препятствия)"
+            text = "НЕТ РЕШЕНИЙ (добавьте препятствия и нажмите 'Найти решение')"
 
         self.ax.text(n / 2, -1.8, text,
                      ha='center', va='top',
@@ -383,37 +454,39 @@ class KQueensVisualizer:
         self.fig.canvas.draw_idle()
 
     def update_display(self):
-        if self.solutions:
+        if self.solutions and not self.has_changes:
             board = self.solutions[self.current_idx]
         else:
             board = None
         self.draw_board(board)
 
     def prev_solution(self, event):
-        if self.current_idx > 0:
+        if self.solutions and not self.has_changes and self.current_idx > 0:
             self.current_idx -= 1
             self.selected_queen = None
             self.highlighted_queens.clear()
             self.update_display()
 
     def next_solution(self, event):
-        if self.current_idx < self.total - 1:
+        if self.solutions and not self.has_changes and self.current_idx < self.total - 1:
             self.current_idx += 1
             self.selected_queen = None
             self.highlighted_queens.clear()
             self.update_display()
 
     def first_solution(self, event):
-        self.current_idx = 0
-        self.selected_queen = None
-        self.highlighted_queens.clear()
-        self.update_display()
+        if self.solutions and not self.has_changes:
+            self.current_idx = 0
+            self.selected_queen = None
+            self.highlighted_queens.clear()
+            self.update_display()
 
     def last_solution(self, event):
-        self.current_idx = self.total - 1
-        self.selected_queen = None
-        self.highlighted_queens.clear()
-        self.update_display()
+        if self.solutions and not self.has_changes:
+            self.current_idx = self.total - 1
+            self.selected_queen = None
+            self.highlighted_queens.clear()
+            self.update_display()
 
 
 if __name__ == "__main__":
