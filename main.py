@@ -1,71 +1,99 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.widgets import Button
+from itertools import combinations
 
 
-def solve_k_queens(n, k, obstacles):
-    solutions = []
-    board = [-1] * k
-
-    def is_safe(row, col):
-        if (row, col) in obstacles:
+def is_safe_position(queens, obstacles, n):
+    """Проверяет, что ферзи не бьют друг друга и не стоят на препятствиях"""
+    for i, (r1, c1) in enumerate(queens):
+        if (r1, c1) in obstacles:
             return False
-        for prev_row in range(row):
-            prev_col = board[prev_row]
-            if prev_col == col:
-                return False
-            if abs(prev_col - col) == abs(prev_row - row):
-                return False
-        return True
+        for j, (r2, c2) in enumerate(queens):
+            if i != j:
+                if r1 == r2 or c1 == c2 or abs(r1 - r2) == abs(c1 - c2):
+                    return False
+    return True
 
-    def backtrack(row):
-        if row == k:
-            solutions.append(board.copy())
-            return
-        for col in range(n):
-            if is_safe(row, col):
-                board[row] = col
-                backtrack(row + 1)
 
-    backtrack(0)
-    return solutions
+def get_attacked_cells(queens, obstacles, n):
+    """Возвращает множество клеток, атакуемых ферзями (включая их позиции)"""
+    attacked = set()
+    for r, c in queens:
+        attacked.add((r, c))
+        for dr, dc in [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]:
+            nr, nc = r + dr, c + dc
+            while 0 <= nr < n and 0 <= nc < n:
+                if (nr, nc) in obstacles:
+                    break
+                attacked.add((nr, nc))
+                nr += dr
+                nc += dc
+    return attacked
+
+
+def find_min_dominating_queens(n, obstacles):
+    """Находит минимальное количество ферзей, покрывающих всю доску"""
+    all_cells = {(r, c) for r in range(n) for c in range(n) if (r, c) not in obstacles}
+    
+    if not all_cells:
+        return [], 0
+    
+    for k in range(1, n * n + 1):
+        available_positions = [(r, c) for r in range(n) for c in range(n) 
+                               if (r, c) not in obstacles]
+        
+        solutions_for_k = []
+        for positions in combinations(available_positions, k):
+            if not is_safe_position(positions, obstacles, n):
+                continue
+            
+            attacked = get_attacked_cells(positions, obstacles, n)
+            if all_cells.issubset(attacked):
+                solutions_for_k.append([[r, c] for r, c in positions])
+        
+        if solutions_for_k:
+            return solutions_for_k, k
+    
+    return [], -1
 
 
 class KQueensVisualizer:
-    def __init__(self, n, k):
+    def __init__(self, n, k=None):
         self.n = n
-        self.k = k
+        self.k = k  # теперь k не используется, оставлен для совместимости
         self.obstacles = set()
         self.selected_queen = None
         self.current_idx = 0
-        self.check_mode = False  # режим проверки ходов
-        self.highlighted_queens = set()  # МНОЖЕСТВО ферзей, чьи ходы показываем
+        self.check_mode = False
+        self.highlighted_queens = set()
+        self.solutions = []
+        self.total = 0
+        self.min_queens = 0
 
-        print("Считаем решения...")
-        self.solutions = solve_k_queens(n, k, set())
-        self.total = len(self.solutions)
-
-        print(f"Найдено {self.total} решений")
-
+        # Сначала создаем окно и оси
         self.fig, self.ax = plt.subplots(figsize=(9, 9))
         plt.subplots_adjust(bottom=0.18)
-
-        self.update_window_title()
+        
+        # Затем создаем кнопки
         self.create_buttons()
-
+        
+        # Подключаем обработчик кликов
         self.fig.canvas.mpl_connect('button_press_event', self.on_click)
-
-        self.update_display()
+        
+        # Теперь запускаем поиск решений
+        print("Ищем минимальное покрытие доски ферзями...")
+        self.recalculate()
 
     def update_window_title(self):
         if self.total > 0:
-            title = f"Задача о {self.k} ферзях - Решение {self.current_idx + 1} из {self.total}"
+            title = f"Минимальное покрытие доски {self.n}x{self.n} - {self.min_queens} ферзей - Решение {self.current_idx + 1} из {self.total}"
             if self.check_mode:
                 title += f" [Режим проверки: подсвечено {len(self.highlighted_queens)} ферзей]"
             self.fig.canvas.manager.set_window_title(title)
         else:
             self.fig.canvas.manager.set_window_title(
-                f"Задача о {self.k} ферзях - НЕТ РЕШЕНИЙ"
+                f"Покрытие доски {self.n}x{self.n} - НЕТ РЕШЕНИЙ"
             )
 
     def create_buttons(self):
@@ -105,7 +133,7 @@ class KQueensVisualizer:
         """Включение/выключение режима проверки ходов"""
         self.check_mode = not self.check_mode
         if not self.check_mode:
-            self.highlighted_queens.clear()  # Очищаем подсветку при выходе
+            self.highlighted_queens.clear()
         self.selected_queen = None
         self.update_display()
 
@@ -150,30 +178,28 @@ class KQueensVisualizer:
 
         # В режиме проверки ходов
         if self.check_mode and self.solutions:
-            board = self.solutions[self.current_idx]
             # Проверяем, есть ли ферзь в этой клетке
-            if row < len(board) and board[row] == col:
-                queen_pos = (row, col)
-                # Переключаем подсветку ферзя: если уже подсвечен - убираем, если нет - добавляем
-                if queen_pos in self.highlighted_queens:
-                    self.highlighted_queens.discard(queen_pos)
-                else:
-                    self.highlighted_queens.add(queen_pos)
-                self.update_display()
-                return
-            # Клик вне ферзя - ничего не делаем (оставляем текущие подсветки)
+            for idx, (r, c) in enumerate(self.solutions[self.current_idx]):
+                if r == row and c == col:
+                    queen_pos = (row, col)
+                    if queen_pos in self.highlighted_queens:
+                        self.highlighted_queens.discard(queen_pos)
+                    else:
+                        self.highlighted_queens.add(queen_pos)
+                    self.update_display()
+                    return
             return
 
         # Обычный режим: ПКМ - выделение ферзя
         if event.button == 3 and self.solutions:
-            board = self.solutions[self.current_idx]
-            if row < len(board) and board[row] == col:
-                if self.selected_queen == (row, col):
-                    self.selected_queen = None
-                else:
-                    self.selected_queen = (row, col)
-                self.update_display()
-                return
+            for idx, (r, c) in enumerate(self.solutions[self.current_idx]):
+                if r == row and c == col:
+                    if self.selected_queen == (row, col):
+                        self.selected_queen = None
+                    else:
+                        self.selected_queen = (row, col)
+                    self.update_display()
+                    return
 
         # Обычный режим: ЛКМ - добавление/удаление препятствий
         if event.button == 1 and not self.check_mode:
@@ -185,11 +211,18 @@ class KQueensVisualizer:
             self.recalculate()
 
     def recalculate(self):
-        self.solutions = solve_k_queens(self.n, self.k, self.obstacles)
+        self.solutions, self.min_queens = find_min_dominating_queens(self.n, self.obstacles)
         self.total = len(self.solutions)
         self.current_idx = 0
         self.check_mode = False
         self.highlighted_queens.clear()
+        self.selected_queen = None
+        
+        if self.total > 0:
+            print(f"Найдено {self.total} решений с {self.min_queens} ферзями")
+        else:
+            print("Решений не найдено")
+        
         self.update_display()
 
     def clear_obstacles(self, event):
@@ -197,10 +230,7 @@ class KQueensVisualizer:
         self.selected_queen = None
         self.check_mode = False
         self.highlighted_queens.clear()
-        self.solutions = solve_k_queens(self.n, self.k, set())
-        self.total = len(self.solutions)
-        self.current_idx = 0
-        self.update_display()
+        self.recalculate()
 
     def draw_board(self, board):
         self.ax.clear()
@@ -217,29 +247,37 @@ class KQueensVisualizer:
                        extent=[-0.5, n - 0.5, n - 0.5, -0.5])
 
         # Преобразуем board в список координат ферзей
-        queens_coords = []
-        if board:
-            for row, col in enumerate(board):
-                if col != -1:
-                    queens_coords.append((row, col))
+        queens_coords = board if board else []
+
+        # Рисуем зоны атаки всех ферзей (полупрозрачная зеленая заливка)
+        if queens_coords:
+            all_attacked = set()
+            for r, c in queens_coords:
+                all_attacked.update(self.get_moves_for_queen(r, c))
+                all_attacked.add((r, c))
+            
+            for (r, c) in all_attacked:
+                if (r, c) not in queens_coords:
+                    rect = plt.Rectangle((c - 0.5, r - 0.5), 1, 1,
+                                         color='lightgreen', alpha=0.2, zorder=1)
+                    self.ax.add_patch(rect)
 
         # Рисуем ходы выделенного ферзя в обычном режиме (ПКМ)
         if self.selected_queen and not self.check_mode:
             moves = self.get_moves_for_queen(*self.selected_queen)
             for (r, c) in moves:
                 rect = plt.Rectangle((c - 0.5, r - 0.5), 1, 1,
-                                     color='orange', alpha=0.3, zorder=1)
+                                     color='orange', alpha=0.3, zorder=2)
                 self.ax.add_patch(rect)
                 
                 dot = plt.Circle((c, r), 0.12,
-                                 color='blue', alpha=0.8, zorder=3)
+                                 color='blue', alpha=0.8, zorder=4)
                 self.ax.add_patch(dot)
 
-        # Рисуем ходы подсвеченных ферзей в режиме проверки (НЕСКОЛЬКИХ)
+        # Рисуем ходы подсвеченных ферзей в режиме проверки
         if self.check_mode and self.highlighted_queens:
             for highlighted in self.highlighted_queens:
                 moves = self.get_moves_for_queen(*highlighted)
-                # Находим индекс ферзя для цвета
                 queen_idx = None
                 for idx, (r, c) in enumerate(queens_coords):
                     if (r, c) == highlighted:
@@ -249,36 +287,32 @@ class KQueensVisualizer:
                 if queen_idx is not None:
                     queen_color = self.get_color_for_queen(queen_idx)
                     for (r, c) in moves:
-                        # Заливка клеток ходов полупрозрачным цветом ферзя
                         rect = plt.Rectangle((c - 0.5, r - 0.5), 1, 1,
-                                             color=queen_color, alpha=0.25, zorder=1)
+                                             color=queen_color, alpha=0.25, zorder=2)
                         self.ax.add_patch(rect)
                         
-                        # Точки цветом ферзя
                         dot = plt.Circle((c, r), 0.12,
-                                         color=queen_color, alpha=0.8, zorder=3)
+                                         color=queen_color, alpha=0.8, zorder=4)
                         self.ax.add_patch(dot)
 
         # Рисуем препятствия
         for (row, col) in self.obstacles:
             rect = plt.Rectangle((col - 0.5, row - 0.5), 1, 1,
-                                 color='gray', alpha=0.7, zorder=2)
+                                 color='gray', alpha=0.7, zorder=3)
             self.ax.add_patch(rect)
 
         # Рисуем ферзей
         if queens_coords:
             for idx, (r, c) in enumerate(queens_coords):
-                # Определяем цвет ферзя
                 if self.selected_queen == (r, c) and not self.check_mode:
-                    color = 'blue'  # Выделенный ПКМ ферзь
+                    color = 'blue'
                 elif self.check_mode and (r, c) in self.highlighted_queens:
-                    color = self.get_color_for_queen(idx)  # Подсвеченный в режиме проверки
+                    color = self.get_color_for_queen(idx)
                 elif self.check_mode:
-                    color = 'black'  # Остальные ферзи в режиме проверки
+                    color = 'black'
                 else:
-                    color = 'red'  # Обычный режим
+                    color = 'red'
 
-                # Добавляем обводку для подсвеченных ферзей
                 if self.check_mode and (r, c) in self.highlighted_queens:
                     self.ax.text(
                         c, r, '♕',
@@ -304,19 +338,32 @@ class KQueensVisualizer:
 
         # Текстовая информация
         if self.total > 0:
+            # Проверяем, все ли клетки покрыты
+            all_cells = {(r, c) for r in range(n) for c in range(n) 
+                        if (r, c) not in self.obstacles}
+            attacked = set()
+            for r, c in queens_coords:
+                attacked.update(self.get_moves_for_queen(r, c))
+                attacked.add((r, c))
+            uncovered = all_cells - attacked
+            
             if self.check_mode:
                 if self.highlighted_queens:
                     text = f"Режим проверки - подсвечено {len(self.highlighted_queens)} ферзей (кликни для добавления/удаления)"
                 else:
                     text = f"Режим проверки - кликни на ферзя, чтобы показать его ходы"
             else:
-                text = f"Решение {self.current_idx + 1} из {self.total} (ПКМ по ферзю - показать ходы)"
+                text = f"Решение {self.current_idx + 1} из {self.total} | Ферзей: {self.min_queens}"
+                if uncovered:
+                    text += f" | НЕПОКРЫТО: {len(uncovered)} клеток!"
+                else:
+                    text += " | ✓ ВСЕ КЛЕТКИ ПОКРЫТЫ"
         else:
-            text = "НЕТ РЕШЕНИЙ"
+            text = "НЕТ РЕШЕНИЙ (добавьте или уберите препятствия)"
 
         self.ax.text(n / 2, -1.8, text,
                      ha='center', va='top',
-                     fontsize=12,
+                     fontsize=11,
                      fontweight='bold',
                      bbox=dict(boxstyle='round',
                                facecolor='lightyellow',
@@ -370,13 +417,14 @@ class KQueensVisualizer:
 
 
 if __name__ == "__main__":
-    print("Задача K-ферзей\n")
-
+    print("Задача о минимальном покрытии доски ферзями")
+    print("Ферзи не должны бить друг друга, но должны атаковать все клетки доски")
+    print()
+    
     try:
         n = int(input("Введите размер доски N: "))
-        k = int(input("Введите количество ферзей K: "))
     except:
-        n, k = 8, 8
-
-    viz = KQueensVisualizer(n, k)
+        n = 5
+    
+    viz = KQueensVisualizer(n)
     plt.show()
