@@ -84,8 +84,6 @@ class KQueensVisualizer:
         # Подключаем обработчик кликов
         self.fig.canvas.mpl_connect('button_press_event', self.on_click)
         
-        # Запускаем начальный поиск решений для пустой доски
-        print("Ищем минимальное покрытие доски ферзями...")
         self.find_solution(None)
 
     def update_window_title(self):
